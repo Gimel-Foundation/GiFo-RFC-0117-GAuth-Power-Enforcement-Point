@@ -1179,6 +1179,7 @@ any check produces ``fail`` with ``error`` severity, subsequent checks MAY be sk
         │
   CHK-17: Grant Conditions           (mandate-level conditions: min_trust_class,
                                       continuous_verification)
+
 9.2 Check Specifications
 --------------------------
 

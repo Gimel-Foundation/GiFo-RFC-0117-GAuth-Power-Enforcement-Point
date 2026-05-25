@@ -1,4 +1,4 @@
-# GiFo-RFC-0117
+# GiFo-RFC-0117 (v. 1.2.1)
 
 GAuth: Power Enforcement Point
 

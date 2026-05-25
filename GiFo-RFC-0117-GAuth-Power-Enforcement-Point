@@ -1181,6 +1181,8 @@ any check produces ``fail`` with ``error`` severity, subsequent checks MAY be sk
                                       continuous_verification)
 
 
+
+
 9.2 Check Specifications
 --------------------------
 

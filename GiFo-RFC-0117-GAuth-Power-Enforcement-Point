@@ -818,6 +818,12 @@ PEP implementations MUST return this schema.
    * - ``DELEGATION_SCOPE_EXCEEDED``
      - CHK-16
      - Delegated scope exceeds delegator's scope
+   * - ``REPUTATION_BELOW_GRANT_CONDITION``
+     - CHK-17
+     - Agent's effective trust class is below the minimum required by the mandate's ``conditions.min_trust_class`` (per-action FAIL; no revocation)
+   * - ``CONTINUOUS_VERIFICATION_NOT_SATISFIED``
+     - CHK-17
+     - Mandate requires continuous verification but the PEP could not confirm fresh status (stateful re-evaluation unavailable or revocation channel not subscribed)
 
 ----
 
@@ -1170,7 +1176,9 @@ any check produces ``fail`` with ``error`` severity, subsequent checks MAY be sk
   CHK-15: Approval                   (approval mode + action-specific
         │                              approval requirements)
   CHK-16: Delegation Chain           (chain validity, depth, scope narrowing)
-
+        │
+  CHK-17: Grant Conditions           (mandate-level conditions: min_trust_class,
+                                      continuous_verification)
 9.2 Check Specifications
 --------------------------
 
@@ -1544,6 +1552,44 @@ CHK-16: Delegation Chain
 
 See Section 11 for full delegation chain enforcement semantics.
 
+CHK-17: Grant Conditions
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- **Input:** ``credential.conditions`` (RFC 0116 §4.3), ``agent``, ``context`` (mode, revocation subscription state)
+- **PoA fields evaluated:** ``conditions.min_trust_class``, ``conditions.continuous_verification``
+
+**Logic:**
+
+::
+
+  1. If credential.conditions is absent or empty → SKIP (no grant-level conditions).
+
+  2. If conditions.min_trust_class is present:
+     a. Resolve agent.effective_trust_class:
+        - local_tier   := tier from the agent's local trust score (RFC 0140 §4.3.3)
+        - cross_tier   := tier from the cross-attested score (PIP lookup, RFC 0140 §4.3.3)
+        - effective_tier := min(local_tier, cross_tier)
+          (5-tier ordering: untrusted < probationary < standard < trusted < verified_partner)
+     b. If effective_tier < conditions.min_trust_class
+        → FAIL (REPUTATION_BELOW_GRANT_CONDITION).
+        The failure is per-action; the mandate is NOT revoked.
+
+  3. If conditions.continuous_verification == true:
+     a. If mode == "stateless"
+        → FAIL (CONTINUOUS_VERIFICATION_NOT_SATISFIED).
+        Continuous verification REQUIRES stateful re-evaluation regardless of
+        governance-profile defaults (overrides §10.4 mode selection).
+     b. If mode == "stateful" AND the PEP is not subscribed to the issuer's
+        push-revocation channel (RFC 0210 §3.5 Q6)
+        → FAIL (CONTINUOUS_VERIFICATION_NOT_SATISFIED).
+     c. Otherwise → PASS.
+
+**Precedence:** CHK-17 runs after CHK-01/CHK-02 (the credential must be integrity-valid and not expired/revoked) and before scope checks (CHK-03..CHK-16). A mandate that fails CHK-17 is treated as not applicable to this action; scope checks MAY be short-circuited for efficiency but MAY still run for audit completeness (implementation-defined).
+
+**Trust class data source:** The agent's local trust score is computed per RFC 0140 §4.3.3. Cross-attested scores are retrieved via the Policy Information Point (PIP); the PIP contract is implementation-defined. PEPs that cannot reach the PIP MUST treat ``cross_tier`` as ``untrusted`` and rely on ``effective_tier := local_tier`` only if the governance profile explicitly permits PIP-degraded evaluation; otherwise CHK-17 FAILs closed.
+
+**Audit:** Both failure codes MUST emit a violation entry containing the resolved ``effective_tier``, the required ``min_trust_class``, and the mode the PEP ran in. This supports later forensics on whether a deny was driven by reputation drift or by infrastructure unavailability.
+
 9.3 Check Applicability
 -------------------------
 
@@ -1588,6 +1634,8 @@ action type and PoA content:
      - PoA approval_mode != "autonomous" OR verb has requiresApproval
    * - CHK-16 (Delegation)
      - ``delegation_chain`` is non-empty
+   * - CHK-17 (Conditions)
+     - ``credential.conditions`` defines ``min_trust_class`` or ``continuous_verification``
 
 When a check does not apply, the PEP returns ``result: "skip"`` for that check.
 
@@ -1669,10 +1717,15 @@ presented credential. No network calls are made to the issuer.
    * - CHK-16 (Delegation)
      - Partial
      - Chain structure is in the PoA; scope validation limited
+   * - CHK-17 (Conditions)
+     - Partial
+     - ``min_trust_class`` evaluable if a fresh trust snapshot is cached; ``continuous_verification == true`` always FAILs in stateless mode
 
 **Limitations:** Stateless enforcement cannot verify live mandate status (revocation,
 budget updates), cannot evaluate full permission objects (only hashes), and cannot
 check approval records.
+
+**Mode override:** A mandate carrying ``conditions.continuous_verification == true`` forces stateful mode regardless of §10.4 selection logic. If stateful mode is unavailable, CHK-17 FAILs closed with ``CONTINUOUS_VERIFICATION_NOT_SATISFIED``.
 
 10.3 Stateful Enforcement
 --------------------------
@@ -2628,7 +2681,7 @@ Appendix F: Reference Documents
      - Authorization flows, roles, trust model — the policy framework the PEP enforces
    * - GiFo-RFC 0115 — Three-Layer Capability Framework
      - Conceptual schema for PoA capabilities and governance profile ceiling tables — the capability model the PEP evaluates
-   * - GiFo-RFC 0116 v2.2 — GAuth Interoperability
+   * - GiFo-RFC 0116 v2.2.1 — GAuth Interoperability
      - Token format, credential schema, validation modes, error response schema — the credential contract the PEP validates and enforces
    * - XACML 3.0 (OASIS)
      - Policy Enforcement Point architecture reference — terminology and patterns
